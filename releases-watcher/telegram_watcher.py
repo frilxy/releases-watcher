@@ -59,7 +59,7 @@ def telegram(text):
             "chat_id": TG_CHAT_ID,
             "text": text,
             "parse_mode": "HTML",
-            "disable_web_page_preview": "true",
+            "disable_web_page_preview": "false",
         }
     ).encode()
 
