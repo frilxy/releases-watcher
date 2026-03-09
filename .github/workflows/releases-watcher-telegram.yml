@@ -2,7 +2,7 @@ name: Releases Watcher - Telegram
 
 on:
   schedule:
-    - cron: "*/30 * * * *"   # 每30分钟执行
+    - cron: "*/30 * * * *"
   workflow_dispatch:
 
 jobs:
@@ -23,37 +23,70 @@ jobs:
           TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
           TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
           IS_MANUAL: ${{ github.event_name == 'workflow_dispatch' }}
+        shell: bash
         run: |
           python - <<'PY'
+          import html
           import json
           import os
           import pathlib
-          import urllib.request
-          import urllib.parse
+          import sys
           import urllib.error
-          import html
+          import urllib.parse
+          import urllib.request
 
           REPO_FILE = pathlib.Path("releases-watcher/repos.json")
           STATE_DIR = pathlib.Path(".releases-watcher/telegram")
           STATE_DIR.mkdir(parents=True, exist_ok=True)
 
-          TG_BOT_TOKEN = os.environ["TG_BOT_TOKEN"].strip()
-          TG_CHAT_ID = os.environ["TG_CHAT_ID"].strip()
-          IS_MANUAL = os.environ["IS_MANUAL"] == "true"
+          TG_BOT_TOKEN = os.environ.get("TG_BOT_TOKEN", "").strip()
+          TG_CHAT_ID = os.environ.get("TG_CHAT_ID", "").strip()
+          IS_MANUAL = os.environ.get("IS_MANUAL", "").strip().lower() == "true"
 
           GITHUB_HEADERS = {
               "Accept": "application/vnd.github+json",
               "X-GitHub-Api-Version": "2022-11-28",
-              "User-Agent": "releases-watcher"
+              "User-Agent": "releases-watcher",
           }
 
+          if not TG_BOT_TOKEN:
+              print("Missing secret: TG_BOT_TOKEN")
+              sys.exit(1)
+
+          if not TG_CHAT_ID:
+              print("Missing secret: TG_CHAT_ID")
+              sys.exit(1)
+
+          if not REPO_FILE.exists():
+              print("Repo file not found: {}".format(REPO_FILE))
+              sys.exit(1)
+
           def load_repos():
-              data = json.loads(REPO_FILE.read_text(encoding="utf-8"))
+              try:
+                  data = json.loads(REPO_FILE.read_text(encoding="utf-8"))
+              except Exception as e:
+                  print("Failed to read repos.json: {}".format(e))
+                  sys.exit(1)
+
+              if not isinstance(data, list):
+                  print("repos.json must be a JSON array")
+                  sys.exit(1)
+
               repos = []
+              seen = set()
+
               for item in data:
-                  item = str(item).strip()
-                  if item and "/" in item:
-                      repos.append(item)
+                  repo = str(item).strip()
+                  if not repo:
+                      continue
+                  if "/" not in repo:
+                      print("Skip invalid repo entry: {}".format(repo))
+                      continue
+                  if repo in seen:
+                      continue
+                  seen.add(repo)
+                  repos.append(repo)
+
               return repos
 
           def get_json(url, headers=None, timeout=30):
@@ -63,90 +96,54 @@ jobs:
 
           def get_latest_release(repo):
               owner, name = repo.split("/", 1)
-              url = f"https://api.github.com/repos/{owner}/{name}/releases/latest"
+              url = "https://api.github.com/repos/{}/{}/releases/latest".format(owner, name)
               return get_json(url, headers=GITHUB_HEADERS)
 
           def send_telegram(text):
-              url = f"https://api.telegram.org/bot{TG_BOT_TOKEN}/sendMessage"
-
-              data = urllib.parse.urlencode({
+              api_url = "https://api.telegram.org/bot{}/sendMessage".format(TG_BOT_TOKEN)
+              payload = urllib.parse.urlencode({
                   "chat_id": TG_CHAT_ID,
                   "text": text,
                   "parse_mode": "HTML",
-                  "disable_web_page_preview": "true"
-              }).encode()
+                  "disable_web_page_preview": "true",
+              }).encode("utf-8")
 
               req = urllib.request.Request(
-                  url,
-                  data=data,
+                  api_url,
+                  data=payload,
                   method="POST",
                   headers={
-                      "Content-Type": "application/x-www-form-urlencoded",
-                      "User-Agent": "releases-watcher"
-                  }
+                      "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+                      "User-Agent": "releases-watcher",
+                  },
               )
 
               try:
                   with urllib.request.urlopen(req, timeout=30) as resp:
-                      result = resp.read().decode()
-                      print("Telegram returned:", result)
+                      body = resp.read().decode("utf-8", errors="ignore")
+                      print("Telegram returned:", body)
                       return True
               except urllib.error.HTTPError as e:
-                  print("Telegram error:", e.read().decode())
+                  err_body = e.read().decode("utf-8", errors="ignore")
+                  print("Telegram HTTPError {}: {}".format(e.code, err_body))
                   return False
               except Exception as e:
-                  print("Telegram failed:", e)
+                  print("Telegram send failed: {}".format(e))
                   return False
 
-          def state_file(repo):
-              return STATE_DIR / f"{repo.replace('/','__')}.txt"
+          def state_file_for(repo):
+              return STATE_DIR / "{}.txt".format(repo.replace("/", "__"))
 
           repos = load_repos()
-          notified = 0
+          notifications_sent = 0
+          state_changed = False
+
+          print("Repos loaded:", len(repos))
+          print("Manual run:", IS_MANUAL)
 
           for repo in repos:
+              print("=" * 60)
+              print("Checking:", repo)
 
-              sf = state_file(repo)
-              old_tag = sf.read_text().strip() if sf.exists() else ""
-
-              try:
-                  rel = get_latest_release(repo)
-              except Exception as e:
-                  print(repo,"release fetch failed:",e)
-                  continue
-
-              new_tag = (rel.get("tag_name") or "").strip()
-              name = (rel.get("name") or new_tag).strip()
-              url = (rel.get("html_url") or "").strip()
-
-              if not new_tag:
-                  continue
-
-              # 首次监控
-              if not sf.exists():
-
-                  text = (
-                      f"<b>GitHub Release</b>\n"
-                      f"<b>Repo:</b> {html.escape(repo)}\n"
-                      f"<b>Tag:</b> {html.escape(new_tag)}\n"
-                      f"<b>Status:</b> first notification\n"
-                      f"<a href='{url}'>Open Release</a>"
-                  )
-
-                  if send_telegram(text):
-                      sf.write_text(new_tag)
-                      notified += 1
-
-                  continue
-
-              # 已推送过
-              if new_tag == old_tag:
-                  continue
-
-              # 有新版本
-              text = (
-                  f"<b>GitHub Release Update</b>\n"
-                  f"<b>Repo:</b> {html.escape(repo)}\n"
-                  f"<b>Name:</b> {html.escape(name)}\n"
-                  f"<b>Tag:</b> {html.escape(new_tag)}\n"
-                  f"<
+              sf = state_file_for(repo)
+              has_state = 
