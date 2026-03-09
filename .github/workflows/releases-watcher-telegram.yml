@@ -2,7 +2,7 @@ name: Releases Watcher - Telegram
 
 on:
   schedule:
-    - cron: "*/30 * * * *"
+    - cron: "*/30 * * * *"   # 每30分钟执行
   workflow_dispatch:
 
 jobs:
@@ -22,6 +22,7 @@ jobs:
         env:
           TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
           TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+          IS_MANUAL: ${{ github.event_name == 'workflow_dispatch' }}
         run: |
           python - <<'PY'
           import json
@@ -31,7 +32,6 @@ jobs:
           import urllib.parse
           import urllib.error
           import html
-          import sys
 
           REPO_FILE = pathlib.Path("releases-watcher/repos.json")
           STATE_DIR = pathlib.Path(".releases-watcher/telegram")
@@ -39,6 +39,7 @@ jobs:
 
           TG_BOT_TOKEN = os.environ["TG_BOT_TOKEN"].strip()
           TG_CHAT_ID = os.environ["TG_CHAT_ID"].strip()
+          IS_MANUAL = os.environ["IS_MANUAL"] == "true"
 
           GITHUB_HEADERS = {
               "Accept": "application/vnd.github+json",
@@ -67,80 +68,85 @@ jobs:
 
           def send_telegram(text):
               url = f"https://api.telegram.org/bot{TG_BOT_TOKEN}/sendMessage"
+
               data = urllib.parse.urlencode({
                   "chat_id": TG_CHAT_ID,
                   "text": text,
                   "parse_mode": "HTML",
                   "disable_web_page_preview": "true"
-              }).encode("utf-8")
+              }).encode()
 
               req = urllib.request.Request(
                   url,
                   data=data,
                   method="POST",
                   headers={
-                      "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+                      "Content-Type": "application/x-www-form-urlencoded",
                       "User-Agent": "releases-watcher"
                   }
               )
 
               try:
                   with urllib.request.urlopen(req, timeout=30) as resp:
-                      result = resp.read().decode("utf-8", errors="ignore")
+                      result = resp.read().decode()
                       print("Telegram returned:", result)
                       return True
               except urllib.error.HTTPError as e:
-                  body = e.read().decode("utf-8", errors="ignore")
-                  print(f"Telegram HTTPError {e.code}: {body}")
+                  print("Telegram error:", e.read().decode())
                   return False
               except Exception as e:
-                  print(f"Telegram send failed: {e}")
+                  print("Telegram failed:", e)
                   return False
 
-          def state_file_for(repo):
-              return STATE_DIR / f"{repo.replace('/', '__')}.txt"
+          def state_file(repo):
+              return STATE_DIR / f"{repo.replace('/','__')}.txt"
 
           repos = load_repos()
-          changed = False
+          notified = 0
 
           for repo in repos:
-              print("=" * 60)
-              print("Checking:", repo)
 
-              sf = state_file_for(repo)
-              old_tag = sf.read_text(encoding="utf-8").strip() if sf.exists() else ""
+              sf = state_file(repo)
+              old_tag = sf.read_text().strip() if sf.exists() else ""
 
               try:
                   rel = get_latest_release(repo)
-              except urllib.error.HTTPError as e:
-                  print(f"{repo} latest release HTTP error: {e.code}")
-                  continue
               except Exception as e:
-                  print(f"{repo} latest release failed: {e}")
+                  print(repo,"release fetch failed:",e)
                   continue
 
               new_tag = (rel.get("tag_name") or "").strip()
               name = (rel.get("name") or new_tag).strip()
-              html_url = (rel.get("html_url") or "").strip()
-
-              print("Old tag:", old_tag)
-              print("New tag:", new_tag)
+              url = (rel.get("html_url") or "").strip()
 
               if not new_tag:
-                  print("No tag found, skip.")
                   continue
 
-              # 核心去重逻辑：已经推送过就不再推送
+              # 首次监控
+              if not sf.exists():
+
+                  text = (
+                      f"<b>GitHub Release</b>\n"
+                      f"<b>Repo:</b> {html.escape(repo)}\n"
+                      f"<b>Tag:</b> {html.escape(new_tag)}\n"
+                      f"<b>Status:</b> first notification\n"
+                      f"<a href='{url}'>Open Release</a>"
+                  )
+
+                  if send_telegram(text):
+                      sf.write_text(new_tag)
+                      notified += 1
+
+                  continue
+
+              # 已推送过
               if new_tag == old_tag:
-                  print("Already notified, skip.")
                   continue
 
+              # 有新版本
               text = (
                   f"<b>GitHub Release Update</b>\n"
                   f"<b>Repo:</b> {html.escape(repo)}\n"
                   f"<b>Name:</b> {html.escape(name)}\n"
                   f"<b>Tag:</b> {html.escape(new_tag)}\n"
-                  f"<b>Link:</b> <a href=\"{html.escape(html_url)}\">Open Release</a>"
-              )
-
-              ok = send_telegram
+                  f"<
