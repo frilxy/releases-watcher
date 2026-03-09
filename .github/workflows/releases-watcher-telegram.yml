@@ -6,44 +6,36 @@ on:
   workflow_dispatch:
 
 jobs:
-  releases-watcher-telegram:
+  releases-watcher:
     runs-on: ubuntu-latest
     permissions:
       contents: write
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
-      - name: Prepare state directory
-        run: mkdir -p .releases-watcher/telegram
+      - run: mkdir -p .releases-watcher/telegram
 
-      - name: Run Telegram watcher
+      - name: Run watcher
         env:
           TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
           TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
           IS_MANUAL: ${{ github.event_name == 'workflow_dispatch' }}
         run: python releases-watcher/telegram_watcher.py
 
-      - name: Commit updated state files
+      - name: Commit state
         run: |
-          if [ ! -d .releases-watcher/telegram ]; then
-            echo "State directory does not exist."
-            exit 0
-          fi
-
           if git diff --quiet -- .releases-watcher/telegram; then
-            echo "No state changes"
+            echo "No changes"
             exit 0
           fi
 
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config user.name github-actions
+          git config user.email github-actions@github.com
 
           git add .releases-watcher/telegram
           git commit -m "update release states"
