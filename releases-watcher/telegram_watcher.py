@@ -1,84 +1,59 @@
-import html
 import json
 import os
 import pathlib
-import sys
-import urllib.error
-import urllib.parse
 import urllib.request
-
+import urllib.parse
+import urllib.error
+import html
+import sys
 
 REPO_FILE = pathlib.Path("releases-watcher/repos.json")
 STATE_DIR = pathlib.Path(".releases-watcher/telegram")
 STATE_DIR.mkdir(parents=True, exist_ok=True)
 
-TG_BOT_TOKEN = os.environ.get("TG_BOT_TOKEN", "").strip()
-TG_CHAT_ID = os.environ.get("TG_CHAT_ID", "").strip()
-IS_MANUAL = os.environ.get("IS_MANUAL", "").strip().lower() == "true"
+TG_BOT_TOKEN = os.environ.get("TG_BOT_TOKEN")
+TG_CHAT_ID = os.environ.get("TG_CHAT_ID")
+IS_MANUAL = os.environ.get("IS_MANUAL") == "true"
 
-GITHUB_HEADERS = {
-    "Accept": "application/vnd.github+json",
-    "X-GitHub-Api-Version": "2022-11-28",
-    "User-Agent": "releases-watcher",
-}
+if not TG_BOT_TOKEN:
+    print("Missing TG_BOT_TOKEN")
+    sys.exit(1)
 
+if not TG_CHAT_ID:
+    print("Missing TG_CHAT_ID")
+    sys.exit(1)
 
-def fail(msg: str) -> None:
-    print(msg)
+if not REPO_FILE.exists():
+    print("repos.json not found")
     sys.exit(1)
 
 
-if not TG_BOT_TOKEN:
-    fail("Missing secret: TG_BOT_TOKEN")
-
-if not TG_CHAT_ID:
-    fail("Missing secret: TG_CHAT_ID")
-
-if not REPO_FILE.exists():
-    fail(f"Repo file not found: {REPO_FILE}")
-
-
-def load_repos() -> list[str]:
-    try:
-        data = json.loads(REPO_FILE.read_text(encoding="utf-8"))
-    except Exception as e:
-        fail(f"Failed to read repos.json: {e}")
-
-    if not isinstance(data, list):
-        fail("repos.json must be a JSON array")
-
-    repos: list[str] = []
-    seen: set[str] = set()
-
-    for item in data:
-        repo = str(item).strip()
-        if not repo:
-            continue
-        if "/" not in repo:
-            print(f"Skip invalid repo entry: {repo}")
-            continue
-        if repo in seen:
-            continue
-        seen.add(repo)
-        repos.append(repo)
-
+def load_repos():
+    data = json.loads(REPO_FILE.read_text())
+    repos = []
+    for r in data:
+        r = str(r).strip()
+        if "/" in r:
+            repos.append(r)
     return repos
 
 
-def get_json(url: str, headers: dict | None = None, timeout: int = 30) -> dict:
-    req = urllib.request.Request(url, headers=headers or {})
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        return json.loads(resp.read().decode("utf-8"))
+def github(url):
+    req = urllib.request.Request(url, headers={"User-Agent": "releases-watcher"})
+    with urllib.request.urlopen(req) as resp:
+        return json.loads(resp.read().decode())
 
 
-def get_latest_release(repo: str) -> dict:
+def latest_release(repo):
     owner, name = repo.split("/", 1)
     url = f"https://api.github.com/repos/{owner}/{name}/releases/latest"
-    return get_json(url, headers=GITHUB_HEADERS)
+    return github(url)
 
 
-def send_telegram(text: str) -> bool:
-    api_url = f"https://api.telegram.org/bot{TG_BOT_TOKEN}/sendMessage"
+def telegram(text):
+
+    url = f"https://api.telegram.org/bot{TG_BOT_TOKEN}/sendMessage"
+
     payload = urllib.parse.urlencode(
         {
             "chat_id": TG_CHAT_ID,
@@ -86,104 +61,105 @@ def send_telegram(text: str) -> bool:
             "parse_mode": "HTML",
             "disable_web_page_preview": "true",
         }
-    ).encode("utf-8")
-
-    req = urllib.request.Request(
-        api_url,
-        data=payload,
-        method="POST",
-        headers={
-            "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
-            "User-Agent": "releases-watcher",
-        },
-    )
+    ).encode()
 
     try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            body = resp.read().decode("utf-8", errors="ignore")
-            print("Telegram returned:", body)
-            return True
+        urllib.request.urlopen(url, payload)
+        return True
     except urllib.error.HTTPError as e:
-        err_body = e.read().decode("utf-8", errors="ignore")
-        print(f"Telegram HTTPError {e.code}: {err_body}")
+        print("Telegram HTTPError:", e.read().decode())
         return False
     except Exception as e:
-        print(f"Telegram send failed: {e}")
+        print("Telegram error:", e)
         return False
 
 
-def state_file_for(repo: str) -> pathlib.Path:
-    return STATE_DIR / f"{repo.replace('/', '__')}.txt"
+def state_file(repo):
+    return STATE_DIR / f"{repo.replace('/','__')}.txt"
 
 
-def build_first_message(
-    repo: str,
-    name: str,
-    new_tag: str,
-    html_url: str,
-) -> str:
+def first_message(repo, name, tag, url):
     return "\n".join(
         [
             "<b>GitHub Release</b>",
             f"<b>Repo:</b> {html.escape(repo)}",
             f"<b>Name:</b> {html.escape(name)}",
-            f"<b>Tag:</b> {html.escape(new_tag)}",
+            f"<b>Tag:</b> {html.escape(tag)}",
             "<b>Status:</b> first notification",
-            f"<a href=\"{html.escape(html_url, quote=True)}\">Open Release</a>",
+            f"<a href=\"{html.escape(url)}\">Open Release</a>",
         ]
     )
 
 
-def build_update_message(
-    repo: str,
-    name: str,
-    new_tag: str,
-    old_tag: str,
-    html_url: str,
-) -> str:
+def update_message(repo, name, tag, old_tag, url):
     return "\n".join(
         [
             "<b>GitHub Release Update</b>",
             f"<b>Repo:</b> {html.escape(repo)}",
             f"<b>Name:</b> {html.escape(name)}",
-            f"<b>Tag:</b> {html.escape(new_tag)}",
+            f"<b>Tag:</b> {html.escape(tag)}",
             f"<b>Previous:</b> {html.escape(old_tag)}",
-            f"<a href=\"{html.escape(html_url, quote=True)}\">Open Release</a>",
+            f"<a href=\"{html.escape(url)}\">Open Release</a>",
         ]
     )
 
 
-def build_manual_no_update_message(repo_count: int) -> str:
+def summary_message(count):
     return "\n".join(
         [
             "<b>Releases Watcher</b>",
             "Check completed.",
             "No new releases.",
-            f"Repos checked: {repo_count}",
+            f"Repos checked: {count}",
         ]
     )
 
 
-def main() -> int:
-    repos = load_repos()
-    notifications_sent = 0
-    state_changed = False
+repos = load_repos()
+sent = 0
 
-    print("Repos loaded:", len(repos))
-    print("Manual run:", IS_MANUAL)
+for repo in repos:
 
-    for repo in repos:
-        print("=" * 60)
-        print("Checking:", repo)
+    sf = state_file(repo)
+    old_tag = sf.read_text().strip() if sf.exists() else ""
 
-        sf = state_file_for(repo)
-        has_state = sf.exists()
-        old_tag = sf.read_text(encoding="utf-8").strip() if has_state else ""
+    try:
+        rel = latest_release(repo)
+    except Exception as e:
+        print("Release fetch failed:", repo, e)
+        continue
 
-        try:
-            rel = get_latest_release(repo)
-        except urllib.error.HTTPError as e:
-            print(f"{repo} latest release HTTP error: {e.code}")
-            continue
-        except Exception as e:
-           
+    tag = (rel.get("tag_name") or "").strip()
+    name = (rel.get("name") or tag).strip()
+    url = rel.get("html_url") or ""
+
+    if not tag:
+        continue
+
+    # 首次监控
+    if not sf.exists():
+
+        text = first_message(repo, name, tag, url)
+
+        if telegram(text):
+            sf.write_text(tag)
+            sent += 1
+
+        continue
+
+    # 无变化
+    if tag == old_tag:
+        continue
+
+    text = update_message(repo, name, tag, old_tag, url)
+
+    if telegram(text):
+        sf.write_text(tag)
+        sent += 1
+
+
+# 手动运行且无更新
+if sent == 0 and IS_MANUAL:
+    telegram(summary_message(len(repos)))
+
+print("Notifications:", sent)
