@@ -155,3 +155,24 @@ def main() -> int:
         escaped_repo = html.escape(repo)
         escaped_name = html.escape(name)
         escaped_new_tag = html.escape(new_tag)
+        escaped_old_tag = html.escape(old_tag)
+        escaped_url = html.escape(html_url, quote=True)
+
+        if not has_state:
+            text = (
+                "<b>GitHub Release</b>\n"
+                "<b>Repo:</b> {}\n"
+                "<b>Name:</b> {}\n"
+                "<b>Tag:</b> {}\n"
+                "<b>Status:</b> first notification\n"
+                "<a href=\"{}\">Open Release</a>"
+            ).format(
+                escaped_repo,
+                escaped_name,
+                escaped_new_tag,
+                escaped_url,
+            )
+
+            ok = send_telegram(text)
+            if not ok:
+                print("First notification failed, state file will not 
