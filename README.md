@@ -35,17 +35,17 @@
 
 状态文件保存在仓库内：
 
-.releases-watcher/ └── telegram/ └── owner__repo.txt
+`.releases-watcher/ └── telegram/ └── owner__repo.txt`
 
 每个文件记录一个仓库已经通知过的最新版本号。
 
 例如：
 
-.releases-watcher/telegram/microsoft__vscode.txt
+`.releases-watcher/telegram/microsoft__vscode.txt`
 
 文件内容：
 
-1.89.0
+`1.89.0`
 
 ---
 
@@ -53,11 +53,13 @@
 
 Telegram 消息示例：
 
+```
 GitHub Release Update
 
 Repo: cli/cli Name: GitHub CLI 2.74.2 Tag: v2.74.2 Previous: v2.74.1
 
 Open Release
+```
 
 ---
 
@@ -67,7 +69,7 @@ Open Release
 
 创建一个 GitHub 仓库，并添加以下文件：
 
-.github/workflows/releases-watcher-telegram.yml releases-watcher/telegram_watcher.py releases-watcher/repos.json
+`.github/workflows/releases-watcher-telegram.yml releases-watcher/telegram_watcher.py releases-watcher/repos.json`
 
 ---
 
@@ -77,8 +79,10 @@ Open Release
 
 获取：
 
+```
 - Bot Token
 - Chat ID
+```
 
 ---
 
@@ -86,11 +90,11 @@ Open Release
 
 进入仓库：
 
-Settings → Secrets → Actions
+`Settings → Secrets → Actions`
 
 添加两个 Secret：
 
-TG_BOT_TOKEN TG_CHAT_ID
+`TG_BOT_TOKEN TG_CHAT_ID`
 
 ---
 
@@ -104,11 +108,11 @@ releases-watcher/repos.json
 
 ```json
 [
-"microsoft/vscode",
-"cli/cli",
-"hashicorp/terraform"
+  "microsoft/vscode",
+  "cli/cli",
+  "hashicorp/terraform"
 ]
-'''
+```
 
 ---
 
@@ -116,12 +120,11 @@ releases-watcher/repos.json
 
 进入：
 
-Settings → Actions → General
+`Settings → Actions → General`
 
 设置：
 
-Workflow permissions → Read and write permissions
-
+`Workflow permissions → Read and write permissions`
 
 ---
 
@@ -133,15 +136,13 @@ Workflow permissions → Read and write permissions
 
 手动触发 workflow
 
-
-
 ---
 
 定时任务
 
 默认每 30 分钟检查一次：
 
-cron: "*/30 * * * *"
+`cron: "*/30 * * * *"`
 
 你可以根据需要修改检查频率。
 
@@ -149,7 +150,7 @@ cron: "*/30 * * * *"
 ---
 
 项目结构
-
+```
 releases-watcher
 │
 ├── .github/workflows
@@ -162,7 +163,7 @@ releases-watcher
 └── .releases-watcher
 └── telegram
 └── owner__repo.txt
-
+```
 
 ---
 
