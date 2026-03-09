@@ -143,4 +143,4 @@ jobs:
                   f"<b>Link:</b> <a href=\"{html.escape(html_url)}\">Open Release</a>"
               )
 
-              ok = send_teleg
+              ok = send_telegram
