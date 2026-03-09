@@ -116,6 +116,54 @@ def state_file_for(repo: str) -> pathlib.Path:
     return STATE_DIR / f"{repo.replace('/', '__')}.txt"
 
 
+def build_first_message(
+    repo: str,
+    name: str,
+    new_tag: str,
+    html_url: str,
+) -> str:
+    return "\n".join(
+        [
+            "<b>GitHub Release</b>",
+            f"<b>Repo:</b> {html.escape(repo)}",
+            f"<b>Name:</b> {html.escape(name)}",
+            f"<b>Tag:</b> {html.escape(new_tag)}",
+            "<b>Status:</b> first notification",
+            f"<a href=\"{html.escape(html_url, quote=True)}\">Open Release</a>",
+        ]
+    )
+
+
+def build_update_message(
+    repo: str,
+    name: str,
+    new_tag: str,
+    old_tag: str,
+    html_url: str,
+) -> str:
+    return "\n".join(
+        [
+            "<b>GitHub Release Update</b>",
+            f"<b>Repo:</b> {html.escape(repo)}",
+            f"<b>Name:</b> {html.escape(name)}",
+            f"<b>Tag:</b> {html.escape(new_tag)}",
+            f"<b>Previous:</b> {html.escape(old_tag)}",
+            f"<a href=\"{html.escape(html_url, quote=True)}\">Open Release</a>",
+        ]
+    )
+
+
+def build_manual_no_update_message(repo_count: int) -> str:
+    return "\n".join(
+        [
+            "<b>Releases Watcher</b>",
+            "Check completed.",
+            "No new releases.",
+            f"Repos checked: {repo_count}",
+        ]
+    )
+
+
 def main() -> int:
     repos = load_repos()
     notifications_sent = 0
@@ -138,41 +186,4 @@ def main() -> int:
             print(f"{repo} latest release HTTP error: {e.code}")
             continue
         except Exception as e:
-            print(f"{repo} latest release failed: {e}")
-            continue
-
-        new_tag = str(rel.get("tag_name") or "").strip()
-        name = str(rel.get("name") or new_tag).strip()
-        html_url = str(rel.get("html_url") or "").strip()
-
-        print("Old tag:", old_tag)
-        print("New tag:", new_tag)
-
-        if not new_tag:
-            print("No release tag found, skip.")
-            continue
-
-        escaped_repo = html.escape(repo)
-        escaped_name = html.escape(name)
-        escaped_new_tag = html.escape(new_tag)
-        escaped_old_tag = html.escape(old_tag)
-        escaped_url = html.escape(html_url, quote=True)
-
-        if not has_state:
-            text = (
-                "<b>GitHub Release</b>\n"
-                "<b>Repo:</b> {}\n"
-                "<b>Name:</b> {}\n"
-                "<b>Tag:</b> {}\n"
-                "<b>Status:</b> first notification\n"
-                "<a href=\"{}\">Open Release</a>"
-            ).format(
-                escaped_repo,
-                escaped_name,
-                escaped_new_tag,
-                escaped_url,
-            )
-
-            ok = send_telegram(text)
-            if not ok:
-                print("First notification failed, state file will not 
+           
