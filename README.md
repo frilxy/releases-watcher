@@ -15,6 +15,7 @@
 
 - 支持监控多个 GitHub 仓库
 - 支持监控 Codeberg（codeberg.org，Forgejo）仓库
+- 优先用 RSS/Atom 源探测变化，只有真的变了才调 API，省配额
 - 新版本发布自动 Telegram 推送
 - 新加入监控的仓库自动发送首次通知
 - 自动避免重复推送
@@ -29,10 +30,15 @@
 每次运行时，程序会执行以下流程：
 
 1. 从 `repos.json` 读取需要监控的仓库列表
-2. 调用 GitHub API（`api.github.com`）或 Codeberg API（`codeberg.org/api/v1`）获取最新 Release
-3. 与本地记录的版本进行比较
-4. 如果发现新版本，则发送 Telegram 通知
-5. 将最新版本写入状态文件，避免重复通知
+2. 读取仓库的 `releases.atom` 源（GitHub / Codeberg 都提供），取最新一条的 tag
+3. 与本地记录的版本比较；没变化就直接跳过，**不消耗任何 API 配额**
+4. 有变化时才调用 API（`api.github.com` / `codeberg.org/api/v1`）确认最新正式 Release
+5. 如果 API 确认是新版本，则发送 Telegram 通知
+6. 将最新版本写入状态文件，避免重复通知
+
+> RSS 只负责“发现有没有新东西”，最终以 API 结果为准。因为 feed 里没有 `draft` / `prerelease` 标记，
+> 直接拿 feed 第一条会导致 nightly / beta / RC 疯狂推送；现在的做法是 feed 报变化后用 API 过滤，
+> 日志里会打印 `Prerelease only, skip: ...`。
 
 状态文件保存在仓库内：
 
@@ -169,11 +175,13 @@ TG_BOT_TOKEN=x TG_CHAT_ID=1 DRY_RUN=true python releases-watcher/telegram_watche
 
 定时任务
 
-默认每 45 分钟检查一次：
+默认每 2 小时检查一次：
 
-`cron: "*/45 * * * *"`
+`cron: "0 */2 * * *"`
 
-你可以根据需要修改检查频率。
+你可以根据需要修改检查频率（GitHub 允许的最短间隔是 5 分钟）。注意 GitHub Actions 的定时触发
+是“尽力而为”的：高负载时会延迟甚至直接丢弃运行，实测配置 32 次/天时实际只有约 4 次/天。
+真要稳定频率，需要外部定时器触发 `workflow_dispatch`。
 
 
 ---
@@ -216,9 +224,9 @@ releases-watcher
 
 支持 GitHub Releases 与 Codeberg Releases（Forgejo API）
 
-依赖 GitHub API / Codeberg API，都会被限流
+探测走 RSS/Atom（不计 API 配额），仅在有变化时调 API，因此配额消耗很小
 
-GitHub Actions 有运行频率限制
+GitHub Actions 有运行频率限制，定时任务可能被延迟或丢弃
 
 
 

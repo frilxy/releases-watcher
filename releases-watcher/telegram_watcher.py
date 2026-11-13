@@ -6,6 +6,7 @@ import urllib.parse
 import urllib.error
 import html
 import sys
+import xml.etree.ElementTree as ET
 
 REPO_FILE = pathlib.Path("releases-watcher/repos.json")
 STATE_DIR = pathlib.Path(".releases-watcher/telegram")
@@ -24,6 +25,14 @@ HOSTS = {
     GITHUB: {"name": "GitHub", "domain": "github.com", "api": "https://api.github.com"},
     CODEBERG: {"name": "Codeberg", "domain": "codeberg.org", "api": "https://codeberg.org/api/v1"},
 }
+
+# RSS/Atom 源：只用来发现“有没有变化”，不消耗 API 配额
+FEEDS = {
+    GITHUB: "https://github.com/{owner}/{name}/releases.atom",
+    CODEBERG: "https://codeberg.org/{owner}/{name}/releases.atom",
+}
+
+ATOM_NS = {"a": "http://www.w3.org/2005/Atom"}
 
 # 条目前缀 -> 平台，例如 "codeberg:owner/repo"、"codeberg.org/owner/repo"
 HOST_PREFIXES = {
@@ -103,6 +112,41 @@ def pick_latest_published(rels):
     stable = [r for r in published if not r.get("prerelease")]
     candidates = stable or published
     return candidates[0] if candidates else None
+
+
+def tag_from_entry(entry):
+    """从 Atom 条目里取 tag：优先 release 链接，其次 <id>。
+
+    注意 <title> 是 Release 的名称（"Source files for Version 2.005"），不是 tag。
+    """
+    for link in entry.findall("a:link", ATOM_NS):
+        href = link.get("href") or ""
+        if "/releases/tag/" in href:
+            return urllib.parse.unquote(href.split("/releases/tag/", 1)[1]).strip("/")
+    entry_id = (entry.findtext("a:id", default="", namespaces=ATOM_NS) or "").strip()
+    if "/" in entry_id:
+        return entry_id.rsplit("/", 1)[-1]
+    return ""
+
+
+def newest_feed_release(host, owner, name):
+    """读 releases.atom，返回最新一条（RSS 判定，不花 API 配额）。"""
+    url = FEEDS[host].format(owner=owner, name=name)
+    req = urllib.request.Request(url, headers={"User-Agent": "releases-watcher"})
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        root = ET.fromstring(resp.read())
+    entries = []
+    for e in root.findall("a:entry", ATOM_NS):
+        tag = tag_from_entry(e)
+        if not tag:
+            continue
+        entries.append(
+            {
+                "tag": tag,
+                "name": (e.findtext("a:title", default="", namespaces=ATOM_NS) or "").strip(),
+            }
+        )
+    return entries[0] if entries else None
 
 
 def latest_release(host, owner, name):
@@ -209,6 +253,7 @@ def summary_message(count):
 
 repos = load_repos()
 sent = 0
+api_checks = 0
 
 for repo in repos:
 
@@ -216,6 +261,22 @@ for repo in repos:
     sf = state_file(host, owner, name)
     old_tag = sf.read_text().strip() if sf.exists() else ""
 
+    # 1) 先用 RSS/Atom 判断有没有变化，没变化就完全不碰 API
+    try:
+        feed = newest_feed_release(host, owner, name)
+    except Exception as e:
+        print("Feed fetch failed:", repo["raw"], e)
+        continue
+
+    if not feed:
+        print("No release in feed:", repo["raw"])
+        continue
+
+    if sf.exists() and feed["tag"] == old_tag:
+        continue
+
+    # 2) feed 说有新东西，再用 API 确认（过滤 prerelease/draft，并拿正式名称和链接）
+    api_checks += 1
     try:
         rel = latest_release(host, owner, name)
     except Exception as e:
@@ -229,6 +290,11 @@ for repo in repos:
     if not tag:
         continue
 
+    # feed 里最新那条是 prerelease/资产发布，正式 Release 没变
+    if sf.exists() and tag == old_tag:
+        print("Prerelease only, skip:", repo["raw"], feed["tag"])
+        continue
+
     # 首次监控
     if not sf.exists():
 
@@ -239,10 +305,6 @@ for repo in repos:
                 sf.write_text(tag)
             sent += 1
 
-        continue
-
-    # 无变化
-    if tag == old_tag:
         continue
 
     text = update_message(host, owner, name, rel_name, tag, old_tag, url)
@@ -258,3 +320,4 @@ if sent == 0 and IS_MANUAL:
     notify(summary_message(len(repos)))
 
 print("Notifications:", sent)
+print(f"API checks: {api_checks}/{len(repos)} repos, 其余走 RSS")
